@@ -45,27 +45,37 @@ while True:
         t = r.pose_t  # translation vector (x, y, z) in meters
         R = r.pose_R  # 3x3 rotation matrix
 
-        # Show translation
-        cv2.putText(frame,
-                    f"Pos: x={t[0][0]:.2f} y={t[1][0]:.2f} z={t[2][0]:.2f} m",
-                    (int(ptA[0]), int(ptA[1]) + 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-
         # convert rotation matrix to Euler angles
-        sy = np.sqrt(R[0,0]**2 + R[1,0]**2)
+        sy = np.sqrt(R[0, 0]**2 + R[1, 0]**2)
         if sy > 1e-6:
-            yaw = np.arctan2(R[2,1], R[2,2])
-            pitch = np.arctan2(-R[2,0], sy)
-            roll = np.arctan2(R[1,0], R[0,0])
+            yaw = np.arctan2(R[2, 1], R[2, 2])
+            pitch = np.arctan2(-R[2, 0], sy)
+            roll = np.arctan2(R[1, 0], R[0, 0])
         else:
-            yaw = np.arctan2(-R[1,2], R[1,1])
-            pitch = np.arctan2(-R[2,0], sy)
+            yaw = np.arctan2(-R[1, 2], R[1, 1])
+            pitch = np.arctan2(-R[2, 0], sy)
             roll = 0
 
-        cv2.putText(frame,
-                    f"Rot: yaw={np.degrees(yaw):.1f} pitch={np.degrees(pitch):.1f} roll={np.degrees(roll):.1f}",
-                    (int(ptA[0]), int(ptA[1]) + 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
+        # Black rectangle background
+        cv2.rectangle(frame, (5, 5), (470, 90), (0, 0, 0), -1)
+
+        # New function to make text drawing more visible
+        def draw_text(img, text, pos, color):
+            cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (0, 0, 0), 3)  
+            cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, color, 2)     
+
+        # Translation values
+        draw_text(frame,
+                f"Pos: x={t[0][0]:.2f} y={t[1][0]:.2f} z={t[2][0]:.2f} m",
+                (10, 35), (0, 255, 0))   
+
+        # Rotation values
+        draw_text(frame,
+                f"Rot: yaw={np.degrees(yaw):.1f} pitch={np.degrees(pitch):.1f} roll={np.degrees(roll):.1f}",
+                (10, 70), (0, 200, 255)) 
+
 
     cv2.imshow("AprilTag Detection with Pose", frame)
 
