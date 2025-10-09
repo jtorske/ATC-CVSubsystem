@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
+from collections import deque
 
 # Camera intrinsic parameters
 # Will need to replace this with some callibrated values (requires seperate script)
@@ -15,6 +16,9 @@ tag_size = 0.05
 cap = cv2.VideoCapture(0)
 
 detector = Detector(families="tag36h11")
+
+# Buffers for smoothing
+yaw_hist, pitch_hist, roll_hist = deque(maxlen=10), deque(maxlen=10), deque(maxlen=10)
 
 while True:
     ret, frame = cap.read()
@@ -56,24 +60,33 @@ while True:
             pitch = np.arctan2(-R[2, 0], sy)
             roll = 0
 
+        # Add values to smoothing buffers
+        yaw_hist.append(np.degrees(yaw))
+        pitch_hist.append(np.degrees(pitch))
+        roll_hist.append(np.degrees(roll))
+
+        avg_yaw = np.mean(yaw_hist)
+        avg_pitch = np.mean(pitch_hist)
+        avg_roll = np.mean(roll_hist)
+
         # Black rectangle background
         cv2.rectangle(frame, (5, 5), (470, 90), (0, 0, 0), -1)
 
         # New function to make text drawing more visible
         def draw_text(img, text, pos, color):
             cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (0, 0, 0), 3)  
+                        0.6, (0, 0, 0), 3) 
             cv2.putText(img, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, color, 2)     
+                        0.6, color, 2)    
 
         # Translation values
         draw_text(frame,
                 f"Pos: x={t[0][0]:.2f} y={t[1][0]:.2f} z={t[2][0]:.2f} m",
-                (10, 35), (0, 255, 0))   
+                (10, 35), (0, 255, 0)) 
 
-        # Rotation values
+        # Rotation values (smoothed)
         draw_text(frame,
-                f"Rot: yaw={np.degrees(yaw):.1f} pitch={np.degrees(pitch):.1f} roll={np.degrees(roll):.1f}",
+                f"Rot: yaw={avg_yaw:.0f} pitch={avg_pitch:.0f} roll={avg_roll:.0f}",
                 (10, 70), (0, 200, 255)) 
 
 
