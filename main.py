@@ -35,7 +35,8 @@ def main():
         # example core
         vision_device_id = example_vision_get_device_id(device_manager)
 
-    cap = cv2.VideoCapture(device_manager)
+    # Changed the video capture to the ip of the K3N arm
+    cap = cv2.VideoCapture("rtsp://192.168.1.10/color")
 
     detector = Detector(families="tag36h11")
 
