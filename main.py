@@ -1,21 +1,20 @@
 import cv2
 import numpy as np
 from pupil_apriltags import Detector
-<<<<<<< HEAD
 from collections import deque
 from K3N_Connection import *
-=======
->>>>>>> parent of 6b93797 (Smoothed Euler angle data for better readability)
 
 # Imported Kinova API
 import sys
 import os
 
-from kortex_api.autogen.client_stubs.VisionConfigClientRpc import VisionConfigClient
-from kortex_api.autogen.client_stubs.DeviceManagerClientRpc import DeviceManagerClient
+#from kortex_api.autogen.client_stubs.VisionConfigClientRpc import VisionConfigClient
+#from kortex_api.autogen.client_stubs.DeviceManagerClientRpc import DeviceManagerClient
 
-from kortex_api.autogen.messages import DeviceConfig_pb2, Session_pb2, DeviceManager_pb2, VisionConfig_pb2
+#from kortex_api.autogen.messages import DeviceConfig_pb2, Session_pb2, DeviceManager_pb2, VisionConfig_pb2
     
+# Changed the video capture to the ip of the K3N arm
+cap = cv2.VideoCapture("rtsp://192.168.1.10/color")
 
 def main():
     # Camera intrinsic parameters
@@ -36,8 +35,7 @@ while True:
         # example core
         vision_device_id = example_vision_get_device_id(device_manager)
 
-    # Changed the video capture to the ip of the K3N arm
-    cap = cv2.VideoCapture("rtsp://192.168.1.10/color")
+    
 
     detector = Detector(families="tag36h11")
 
