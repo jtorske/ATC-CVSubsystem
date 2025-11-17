@@ -13,7 +13,8 @@ cy = 240
 # Tag size in meters
 tag_size = 0.05
 
-cap = cv2.VideoCapture(0)
+# Changed the video capture to the ip of the K3N arm
+cap = cv2.VideoCapture("rtsp://192.168.1.10/color")
 
 detector = Detector(families="tag36h11")
 
