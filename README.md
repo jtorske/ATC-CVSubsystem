@@ -40,10 +40,9 @@ cd AprilTagMVP
 
 ## 🧰 3. Install Dependencies
 
-### Option A — Install using your system Python 3.11
+### Install using your system Python 3.11
 
 ```sh
-py -3.11 -m pip install -r requirements.txt
 py -3.11 -m pip install kortex_api-2.2.0.post31-py3-none-any.whl
 ```
 
