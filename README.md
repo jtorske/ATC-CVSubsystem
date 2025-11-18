@@ -25,7 +25,10 @@ Install via `pip`:
 ### **Kinova Kortex SDK**
 Download the Python Kortex SDK: [kortex_api-2.2.0.post31-py3-none-any.whl](https://artifactory.kinovaapps.com/ui/repos/tree/General/generic-public%2Fkortex%2FAPI%2F2.2.0%2Fkortex_api-2.2.0.post31-py3-none-any.whl)
 
-Place it in the project root.
+Place it in the project root and run
+```sh
+py -3.11 -m pip install kortex_api-2.2.0.post31-py3-none-any.whl
+```
 
 ---
 
