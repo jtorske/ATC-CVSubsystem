@@ -1,5 +1,3 @@
-# robot/device_connection.py
-
 import argparse
 from kortex_api.TCPTransport import TCPTransport
 from kortex_api.UDPTransport import UDPTransport
