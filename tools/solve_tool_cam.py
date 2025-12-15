@@ -1,3 +1,8 @@
+# tools/solve_tool_cam.py
+#
+# Solve the Tool→Cam hand–eye transform using AprilTag-based samples.
+# Uses calibration_samples.json produced by robot/apriltag_calibration.py
+
 import json
 import numpy as np
 import cv2
@@ -8,6 +13,29 @@ OUT_PY = os.path.join("common", "tool_cam_config.py")
 
 
 def load_samples(path=CALIB_SAMPLES):
+    """
+    Load hand–eye calibration samples and convert them into the format
+    expected by cv2.calibrateHandEye.
+
+    calibration_samples.json entries look like:
+
+      {
+        "R_base_tool": [[...],[...],[...]],  # 3x3
+        "t_base_tool": [...],               # 3
+        "R_cam_tag":   [[...],[...],[...]],  # 3x3
+        "t_cam_tag":   [...]                 # 3
+      }
+
+    We have:
+      - R_base_tool, t_base_tool : Base → Tool
+      - R_cam_tag,   t_cam_tag   : Cam → Tag
+
+    OpenCV wants:
+      - R_gripper2base, t_gripper2base : Gripper/Tool → Base
+      - R_target2cam,  t_target2cam    : Target/Tag → Cam
+
+    So we invert both transforms before passing them in.
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"'{path}' not found. Run robot.apriltag_calibration first "
@@ -22,17 +50,17 @@ def load_samples(path=CALIB_SAMPLES):
             f"Need at least 3 samples for hand–eye calibration, got {len(samples)}."
         )
 
-    R_gripper2base = []  
-    t_gripper2base = [] 
-    R_target2cam = []   
-    t_target2cam = []  
+    R_gripper2base = []  # Tool → Base
+    t_gripper2base = []  # Tool → Base
+    R_target2cam = []    # Tag → Cam
+    t_target2cam = []    # Tag → Cam
 
     for i, s in enumerate(samples):
         try:
-            R_b_t = np.array(s["R_base_tool"], dtype=float)
-            t_b_t = np.array(s["t_base_tool"], dtype=float)
-            R_c_tag = np.array(s["R_cam_tag"], dtype=float)
-            t_c_tag = np.array(s["t_cam_tag"], dtype=float)
+            R_b_t = np.array(s["R_base_tool"], dtype=float)  # Base → Tool
+            t_b_t = np.array(s["t_base_tool"], dtype=float)  # Base → Tool
+            R_c_tag = np.array(s["R_cam_tag"], dtype=float)  # Cam → Tag
+            t_c_tag = np.array(s["t_cam_tag"], dtype=float)  # Cam → Tag
 
             assert R_b_t.shape == (3, 3)
             assert R_c_tag.shape == (3, 3)
@@ -41,10 +69,22 @@ def load_samples(path=CALIB_SAMPLES):
         except Exception as e:
             raise RuntimeError(f"Bad sample format at index {i}: {e}")
 
-        R_gripper2base.append(R_b_t)
-        t_gripper2base.append(t_b_t)
-        R_target2cam.append(R_c_tag)
-        t_target2cam.append(t_c_tag)
+        # ---- Invert Base→Tool to get Tool→Base (OpenCV wants this) ----
+        # Tool→Base:  T_tb = T_bt^{-1}
+        # R_tb = R_bt^T
+        # t_tb = -R_tb * t_bt
+        R_t_b = R_b_t.T
+        t_t_b = -R_t_b @ t_b_t
+
+        # ---- Invert Cam→Tag to get Tag→Cam (OpenCV wants this) ----
+        # Tag→Cam:  T_tc = T_ct^{-1}
+        R_tag_c = R_c_tag.T
+        t_tag_c = -R_tag_c @ t_c_tag
+
+        R_gripper2base.append(R_t_b)
+        t_gripper2base.append(t_t_b)
+        R_target2cam.append(R_tag_c)
+        t_target2cam.append(t_tag_c)
 
     return (
         R_gripper2base,
@@ -62,6 +102,9 @@ def solve_tool_cam():
         t_target2cam,
     ) = load_samples()
 
+    # OpenCV calibrateHandEye expects:
+    #   R_gripper2base, t_gripper2base : list of 3x3, 3x1
+    #   R_target2cam,  t_target2cam    : list of 3x3, 3x1
     R_cam2gripper, t_cam2gripper = cv2.calibrateHandEye(
         R_gripper2base,
         t_gripper2base,
@@ -70,10 +113,14 @@ def solve_tool_cam():
         method=cv2.CALIB_HAND_EYE_TSAI,
     )
 
-
+    # Ensure shapes
     R_cam2gripper = np.asarray(R_cam2gripper, dtype=float).reshape(3, 3)
     t_cam2gripper = np.asarray(t_cam2gripper, dtype=float).reshape(3)
 
+    # We want Tool→Cam (gripper→cam):
+    #   T_cam_gripper = [R_cg, t_cg]
+    #   T_gripper_cam = T_cam_gripper^{-1}
+    #                 = [R_cg^T, -R_cg^T * t_cg]
     R_tool_cam = R_cam2gripper.T
     t_tool_cam = -R_tool_cam @ t_cam2gripper
 

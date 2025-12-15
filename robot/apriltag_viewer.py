@@ -1,59 +1,123 @@
+# robot/apriltag_viewer.py
+#
+# Live AprilTag viewer that:
+#   - Reads Kinova K3 RTSP stream
+#   - Detects AprilTags using calibrated intrinsics
+#   - Uses live Base→Tool from the robot + fixed Tool→Cam extrinsics
+#   - Computes and overlays live Base→Tag pose
+#   - (Optional) compares against ground-truth Base→Tag coordinates
+
 import cv2
 import numpy as np
 import argparse
 from collections import deque
 
+from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
+from robot.device_connection import DeviceConnection, parse_connection_arguments
+
 from common.apriltag_utils import create_detector, rotation_to_euler_xyz
 from common.webcam_config import (
     rtsp_url,
     tag_size,
-    camera_params,   
+    camera_params,   # (fx, fy, cx, cy) from camera_intrinsics.json
 )
-from common.base_tag_config import R_base_cam, t_base_cam  
-from common.tool_cam_config import R_tool_cam, t_tool_cam
+from common.tool_cam_config import R_tool_cam, t_tool_cam  # your Tool→Cam
 
 
 # ================================================================
 # DEPTH / SCALE CONSTANTS – MATCH apriltag_calibration.py
 # ================================================================
 
-POSE_SCALE = 1.6730539
+POSE_SCALE =1
 
+# Optional extra Z scaling on intrinsics:
 fx_calib, fy_calib, cx_calib, cy_calib = camera_params
-SCALE_Z = 0.30 / 0.225
+SCALE_Z = 0.30 / 0.225  # 1.333...
 
 fx_tag = fx_calib * SCALE_Z
 fy_tag = fy_calib * SCALE_Z
 camera_params_tag = (fx_tag, fy_tag, cx_calib, cy_calib)
 
 print("[INFO] Calibrated intrinsics (checkerboard):")
-print(f"  fx = {fx_calib:.3f}, fy = {fy_calib:.3f}, cx = {cx_calib:.3f}, cy = {cy_calib:.3f}")
+print(f"  fx = {fx_calib:.3f}, fy = {fy_calib:.3f}, "
+      f"cx = {cx_calib:.3f}, cy = {cy_calib:.3f}")
 print("[INFO] Empirical Z scale factor (intrinsics):", SCALE_Z)
 print("[INFO] Global pose scale factor (POSE_SCALE):", POSE_SCALE)
 print("[INFO] AprilTag intrinsics used for pose:")
-print(f"  fx_tag = {fx_tag:.3f}, fy_tag = {fy_tag:.3f}, cx = {cx_calib:.3f}, cy = {cy_calib:.3f}")
-print("[INFO] Base→Cam from common.base_tag_config:")
-print("R_base_cam =\n", R_base_cam)
-print("t_base_cam =", t_base_cam)
+print(f"  fx_tag = {fx_tag:.3f}, fy_tag = {fy_tag:.3f}, "
+      f"cx = {cx_calib:.3f}, cy = {cy_calib:.3f}")
+print("[INFO] Tool→Cam from common.tool_cam_config:")
+print("R_tool_cam =\n", R_tool_cam)
+print("t_tool_cam =", t_tool_cam)
 
 
 # ================================================================
-# COMPOSE BASE→TAG FROM BASE→CAM AND CAM→TAG
+# EULER → ROTATION MATRIX (same as apriltag_calibration.py)
 # ================================================================
+def euler_xyz_to_R(rx, ry, rz):
+    cx, cy, cz = np.cos([rx, ry, rz])
+    sx, sy, sz = np.sin([rx, ry, rz])
 
+    Rx = np.array([[1, 0, 0],
+                   [0, cx, -sx],
+                   [0, sx,  cx]])
+
+    Ry = np.array([[ cy, 0, sy],
+                   [  0, 1, 0],
+                   [-sy, 0, cy]])
+
+    Rz = np.array([[cz, -sz, 0],
+                   [sz,  cz, 0],
+                   [ 0,  0, 1]])
+
+    return Rz @ Ry @ Rx
+
+
+# ================================================================
+# GET CURRENT BASE→TOOL POSE
+# ================================================================
+def get_robot_pose(base_client: BaseClient):
+    """
+    Returns (R_base_tool, t_base_tool) from Kinova in meters.
+    """
+    pose = base_client.GetMeasuredCartesianPose()
+
+    x = float(pose.x)
+    y = float(pose.y)
+    z = float(pose.z)
+
+    rx = np.deg2rad(pose.theta_x)
+    ry = np.deg2rad(pose.theta_y)
+    rz = np.deg2rad(pose.theta_z)
+
+    R = euler_xyz_to_R(rx, ry, rz)
+    t = np.array([x, y, z], dtype=float)
+
+    return R, t
+
+
+# ================================================================
+# COMPOSE BASE→TAG FROM BASE→TOOL, TOOL→CAM, CAM→TAG
+# ================================================================
 def compose_base_tag(R_base_tool, t_base_tool, R_cam_tag, t_cam_tag):
+    """
+    T_base_cam = T_base_tool · T_tool_cam
+    T_base_tag = T_base_cam · T_cam_tag
+    """
+    # Base→Cam from Base→Tool and Tool→Cam
     R_base_cam = R_base_tool @ R_tool_cam
     t_base_cam = R_base_tool @ t_tool_cam + t_base_tool
 
+    # Base→Tag
     R_base_tag = R_base_cam @ R_cam_tag
     t_base_tag = R_base_cam @ t_cam_tag + t_base_cam
 
     return R_base_tag, t_base_tag
 
+
 # ================================================================
 # ROTATION ERROR (OPTIONAL)
 # ================================================================
-
 def rotation_error_deg(R_ref, R_live):
     R_err = R_ref.T @ R_live
     tr = np.trace(R_err)
@@ -64,10 +128,9 @@ def rotation_error_deg(R_ref, R_live):
 # ================================================================
 # ARG PARSER
 # ================================================================
-
 def parse_args():
     p = argparse.ArgumentParser(
-        description="AprilTag base→tag viewer using Kinova K3 camera"
+        description="AprilTag Base→Tag viewer using Kinova K3 camera"
     )
     p.add_argument(
         "--ip",
@@ -75,6 +138,19 @@ def parse_args():
         default="192.168.1.10",
         help="Robot IP (RTSP camera). Default: 192.168.1.10",
     )
+    p.add_argument(
+    "-u", "--username",
+    type=str,
+    default="SSE_Student",
+    help="Robot username"
+    )
+    p.add_argument(
+        "-p", "--password",
+        type=str,
+        default="KinovaG3",
+        help="Robot password"
+    )
+
     p.add_argument("--gt-x", type=float, default=None, help="Ground-truth Base→Tag X [m]")
     p.add_argument("--gt-y", type=float, default=None, help="Ground-truth Base→Tag Y [m]")
     p.add_argument("--gt-z", type=float, default=None, help="Ground-truth Base→Tag Z [m]")
@@ -84,7 +160,6 @@ def parse_args():
 # ================================================================
 # MAIN VIEWER
 # ================================================================
-
 def main():
     args = parse_args()
 
@@ -94,195 +169,216 @@ def main():
         print("[INFO] Using ground-truth Base→Tag for comparison:")
         print(f"       x={gt_vec[0]:.3f}, y={gt_vec[1]:.3f}, z={gt_vec[2]:.3f} m")
 
-    url = rtsp_url(args.ip)
-    print(f"[INFO] Opening camera: {url}")
-    cap = cv2.VideoCapture(url)
+    # ---------- Connect to robot (for Base→Tool) ----------
+    class ConnArgs:
+        def __init__(self, ip, username, password):
+            self.ip = ip
+            self.username = username
+            self.password = password
 
-    if not cap.isOpened():
-        print(f"[!] ERROR: Could not open RTSP stream: {url}")
-        return
+    conn_args = ConnArgs(args.ip, args.username, args.password)
 
-    w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    print(f"[INFO] RTSP stream resolution: {w} × {h}")
+    with DeviceConnection.create_tcp_connection(conn_args) as router:
+        base_client = BaseClient(router)
+        print("[✓] Connected to robot base for live pose.")
 
-    detector = create_detector()
+        # ---------- Open camera ----------
+        url = rtsp_url(args.ip)
+        print(f"[INFO] Opening camera: {url}")
+        cap = cv2.VideoCapture(url)
 
-    yaw_hist   = deque(maxlen=10)
-    pitch_hist = deque(maxlen=10)
-    roll_hist  = deque(maxlen=10)
+        if not cap.isOpened():
+            print(f"[!] ERROR: Could not open RTSP stream: {url}")
+            return
 
-    print("\n[*] AprilTag Base→Tag viewer")
-    print("    Press 'q' to quit.\n")
+        w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        print(f"[INFO] RTSP stream resolution: {w} × {h}")
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("[!] Failed to read frame.")
-            break
+        detector = create_detector()
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        yaw_hist   = deque(maxlen=10)
+        pitch_hist = deque(maxlen=10)
+        roll_hist  = deque(maxlen=10)
 
-        results = detector.detect(
-            gray,
-            estimate_tag_pose=True,
-            camera_params=camera_params_tag,
-            tag_size=tag_size,
-        )
+        print("\n[*] AprilTag Base→Tag viewer")
+        print("    Move the arm around. Base→Tag should stay ~constant if tag is fixed.")
+        print("    Press 'q' to quit.\n")
 
-        frame_has_tag = False
-        cam_pos = None
-        base_pos = None
-        base_rot_euler = None
-        pos_err = None
-        rot_err_deg = None
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("[!] Failed to read frame.")
+                break
 
-        for r in results:
-            frame_has_tag = True
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            pts = np.array([r.corners], dtype=np.int32)
-            cv2.polylines(frame, pts, True, (0, 255, 0), 2)
-
-            ptA = r.corners[0]
-            cv2.putText(
-                frame,
-                f"ID: {r.tag_id}",
-                (int(ptA[0]), int(ptA[1]) - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 0, 0),
-                2,
+            results = detector.detect(
+                gray,
+                estimate_tag_pose=True,
+                camera_params=camera_params_tag,
+                tag_size=tag_size,
             )
 
-            t_raw = r.pose_t        
-            R_cam_tag = r.pose_R     
+            frame_has_tag = False
+            cam_pos = None
+            base_pos = None
+            base_rot_euler = None
+            pos_err = None
+            rot_err_deg = None
 
-            t_scaled = t_raw * POSE_SCALE
-            t_cam_tag = t_scaled[:, 0]  
+            # ---- Get live Base→Tool pose (once per frame) ----
+            R_base_tool, t_base_tool = get_robot_pose(base_client)
 
-            cam_pos = t_cam_tag.copy()
+            for r in results:
+                frame_has_tag = True
 
-            yaw, pitch, roll = rotation_to_euler_xyz(R_cam_tag)
-            yaw_hist.append(np.degrees(yaw))
-            pitch_hist.append(np.degrees(pitch))
-            roll_hist.append(np.degrees(roll))
+                pts = np.array([r.corners], dtype=np.int32)
+                cv2.polylines(frame, pts, True, (0, 255, 0), 2)
 
-            avg_yaw = np.mean(yaw_hist)
-            avg_pitch = np.mean(pitch_hist)
-            avg_roll = np.mean(roll_hist)
-
-            base_rot_euler = (avg_pitch, avg_yaw, avg_roll)
-
-            R_base_tag, t_base_tag = compose_base_tag(
-                R_base_cam, t_base_cam, R_cam_tag, t_cam_tag
-            )
-            base_pos = t_base_tag.copy()
-
-            if gt_vec is not None:
-                pos_err = base_pos - gt_vec
-                R_ref = np.eye(3)
-                rot_err_deg = rotation_error_deg(R_ref, R_base_tag)
-
-            break
-
-        # ---------------- HUD ----------------
-        cv2.rectangle(frame, (5, 5), (780, 190), (0, 0, 0), -1)
-        y0 = 30
-        dy = 25
-
-        if frame_has_tag and cam_pos is not None and base_pos is not None:
-            cv2.putText(
-                frame,
-                f"Cam→Tag:  x={cam_pos[0]:.3f}  y={cam_pos[1]:.3f}  z={cam_pos[2]:.3f} m",
-                (15, y0),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
-            y0 += dy
-
-            cv2.putText(
-                frame,
-                f"Base→Tag: x={base_pos[0]:.3f}  y={base_pos[1]:.3f}  z={base_pos[2]:.3f} m",
-                (15, y0),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 200, 255),
-                2,
-            )
-            y0 += dy
-
-            if base_rot_euler is not None:
-                yaw_disp, pitch_disp, roll_disp = base_rot_euler
+                ptA = r.corners[0]
                 cv2.putText(
                     frame,
-                    f"Tag Rot (cam): yaw={yaw_disp:.0f}  pitch={pitch_disp:.0f}  roll={roll_disp:.0f}",
+                    f"ID: {r.tag_id}",
+                    (int(ptA[0]), int(ptA[1]) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 0, 0),
+                    2,
+                )
+
+                # Pose in camera frame
+                t_raw = r.pose_t        # 3x1
+                R_cam_tag = r.pose_R    # 3x3
+
+                t_scaled = t_raw * POSE_SCALE
+                t_cam_tag = t_scaled[:, 0]   # (3,)
+
+                cam_pos = t_cam_tag.copy()
+
+                yaw, pitch, roll = rotation_to_euler_xyz(R_cam_tag)
+                yaw_hist.append(np.degrees(yaw))
+                pitch_hist.append(np.degrees(pitch))
+                roll_hist.append(np.degrees(roll))
+
+                avg_yaw = np.mean(yaw_hist)
+                avg_pitch = np.mean(pitch_hist)
+                avg_roll = np.mean(roll_hist)
+
+                # Your swapped display convention
+                base_rot_euler = (avg_pitch, avg_yaw, avg_roll)
+
+                # Compose Base→Tag using LIVE Base→Tool
+                R_base_tag, t_base_tag = compose_base_tag(
+                    R_base_tool, t_base_tool, R_cam_tag, t_cam_tag
+                )
+                base_pos = t_base_tag.copy()
+
+                if gt_vec is not None:
+                    pos_err = base_pos - gt_vec
+                    R_ref = np.eye(3)
+                    rot_err_deg = rotation_error_deg(R_ref, R_base_tag)
+
+                break
+
+            # ---------------- HUD ----------------
+            cv2.rectangle(frame, (5, 5), (780, 190), (0, 0, 0), -1)
+            y0 = 30
+            dy = 25
+
+            if frame_has_tag and cam_pos is not None and base_pos is not None:
+                cv2.putText(
+                    frame,
+                    f"Cam→Tag:  x={cam_pos[0]:.3f}  y={cam_pos[1]:.3f}  z={cam_pos[2]:.3f} m",
                     (15, y0),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (200, 200, 255),
-                    2,
-                )
-                y0 += dy
-
-            if gt_vec is not None and pos_err is not None:
-                dx_cm = pos_err[0] * 100.0
-                dy_cm = pos_err[1] * 100.0
-                dz_cm = pos_err[2] * 100.0
-                norm_cm = float(np.linalg.norm(pos_err) * 100.0)
-
-                cv2.putText(
-                    frame,
-                    f"GT Base→Tag: x={gt_vec[0]:.3f} y={gt_vec[1]:.3f} z={gt_vec[2]:.3f} m",
-                    (15, y0),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (255, 255, 0),
+                    (0, 255, 0),
                     2,
                 )
                 y0 += dy
 
                 cv2.putText(
                     frame,
-                    f"Δ vs GT: dx={dx_cm:+.1f} dy={dy_cm:+.1f} dz={dz_cm:+.1f} cm  |Δ|={norm_cm:.1f} cm",
+                    f"Base→Tag: x={base_pos[0]:.3f}  y={base_pos[1]:.3f}  z={base_pos[2]:.3f} m",
                     (15, y0),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (255, 200, 0),
+                    0.6,
+                    (0, 200, 255),
                     2,
                 )
                 y0 += dy
 
-                if rot_err_deg is not None:
+                if base_rot_euler is not None:
+                    yaw_disp, pitch_disp, roll_disp = base_rot_euler
                     cv2.putText(
                         frame,
-                        f"Approx rot error vs flat: {rot_err_deg:.1f}°",
+                        f"Tag Rot (cam): yaw={yaw_disp:.0f}  pitch={pitch_disp:.0f}  roll={roll_disp:.0f}",
+                        (15, y0),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (200, 200, 255),
+                        2,
+                    )
+                    y0 += dy
+
+                if gt_vec is not None and pos_err is not None:
+                    dx_cm = pos_err[0] * 100.0
+                    dy_cm = pos_err[1] * 100.0
+                    dz_cm = pos_err[2] * 100.0
+                    norm_cm = float(np.linalg.norm(pos_err) * 100.0)
+
+                    cv2.putText(
+                        frame,
+                        f"GT Base→Tag: x={gt_vec[0]:.3f} y={gt_vec[1]:.3f} z={gt_vec[2]:.3f} m",
                         (15, y0),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.55,
-                        (255, 180, 180),
+                        (255, 255, 0),
                         2,
                     )
-        else:
-            cv2.putText(
-                frame,
-                "No AprilTag detected",
-                (15, y0),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 255),
-                2,
-            )
+                    y0 += dy
 
-        cv2.imshow("AprilTag Base→Tag Viewer (Robot Camera)", frame)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
+                    cv2.putText(
+                        frame,
+                        f"Δ vs GT: dx={dx_cm:+.1f} dy={dy_cm:+.1f} dz={dz_cm:+.1f} cm  |Δ|={norm_cm:.1f} cm",
+                        (15, y0),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 200, 0),
+                        2,
+                    )
+                    y0 += dy
 
-    cap.release()
-    cv2.destroyAllWindows()
-    print("[*] Viewer closed.")
+                    if rot_err_deg is not None:
+                        cv2.putText(
+                            frame,
+                            f"Approx rot error vs flat: {rot_err_deg:.1f}°",
+                            (15, y0),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55,
+                            (255, 180, 180),
+                            2,
+                        )
+            else:
+                cv2.putText(
+                    frame,
+                    "No AprilTag detected",
+                    (15, y0),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                )
+
+            cv2.imshow("AprilTag Base→Tag Viewer (Robot Camera)", frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+        print("[*] Viewer closed.")
 
 
 if __name__ == "__main__":

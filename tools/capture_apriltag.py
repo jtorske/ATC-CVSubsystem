@@ -22,7 +22,7 @@ from common.webcam_config import (
 # ================================================================
 base = None
 
-POSE_SCALE = 1.6730539   
+POSE_SCALE = 1
 
 # ================================================================
 # APRILTAG CAMERA PARAMS WITH EMPIRICAL Z-SCALE FIX
@@ -30,7 +30,7 @@ POSE_SCALE = 1.6730539
 
 fx_calib, fy_calib, cx, cy = camera_params
 
-SCALE_Z = 0.30 / 0.225  
+SCALE_Z = 1
 
 fx_tag = fx_calib * SCALE_Z
 fy_tag = fy_calib * SCALE_Z
