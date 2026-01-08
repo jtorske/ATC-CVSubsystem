@@ -1,100 +1,165 @@
-# 🟦 APRILTAGMVP – AprilTag Calibration for Kinova Gen3 / Gen3-N
+# 🟦 APRILTAGMVP — Calibration Branch  
+### AprilTag-Based Camera ↔ Robot Calibration for Kinova Gen3 / Gen3-N
 
-A modular toolkit for detecting AprilTags, streaming camera pose, and collecting calibration samples between the **camera mounted on the end-effector** and the **Kinova Kortex robot base**.
+This branch is **exclusively dedicated to calibration** of the **Kinova K3 camera mounted on the end-effector**, using AprilTags to estimate accurate spatial transforms between:
 
-This repo provides:
-- ✔ A standalone **AprilTag viewer** (webcam only)  
-- ✔ A robot-integrated **calibration capture tool**  
-- ✔ Clean modular folder structure  
-- ✔ Utilities for pose, detection, and Kortex API connections  
+- **Robot Base → End-Effector (live from Kortex)**
+- **End-Effector → Camera (fixed extrinsics)**
+- **Camera → AprilTag (vision-based pose)**
+- **Robot Base → AprilTag (composed result)**
+
+It is **not** intended for task execution, motion planning, or runtime perception — only **data collection, validation, and calibration**.
+
+---
+
+## ✅ What This Branch Provides
+
+✔ Offline AprilTag viewer (no robot required)  
+✔ Robot-integrated calibration capture tool  
+✔ Live Base → Tag pose visualization  
+✔ Clean modular structure for reuse in downstream projects  
+✔ JSON-based calibration dataset output  
 
 ---
 
 ## 📦 1. Requirements
 
-### **Python**
-- Python **3.11**  
-❗ *Python 3.12 will NOT work with Kortex API (protobuf incompatibility).*
+### Python
+- **Python 3.11**
+- ❗ **Python 3.12 is NOT supported** (Kortex protobuf incompatibility)
 
-### **Libraries**
-Install via `pip`:
+Verify:
+```bash
+py -3.11 --version
+```
+
+---
+
+### Libraries
+
+Install via `pip` (Python 3.11):
+
 - `opencv-python`
 - `numpy`
 - `pupil-apriltags`
 
-### **Kinova Kortex SDK**
-Download the Python Kortex SDK: [kortex_api-2.2.0.post31-py3-none-any.whl](https://artifactory.kinovaapps.com/ui/repos/tree/General/generic-public%2Fkortex%2FAPI%2F2.2.0%2Fkortex_api-2.2.0.post31-py3-none-any.whl)
+### Kinova Kortex SDK
+Download:
+```
+kortex_api-2.2.0.post31-py3-none-any.whl
+```
 
-Place it in the project.
+Install:
+```bash
+py -3.11 -m pip install kortex_api-2.2.0.post31-py3-none-any.whl
+```
 
 ---
 
 ## 📥 2. Clone the Repository
 
-```sh
+```bash
 git clone https://github.com/<YOUR_USERNAME>/AprilTagMVP.git
 cd AprilTagMVP
 ```
 
----
-
-## 🧰 3. Install Dependencies
-
-### Install using your system Python 3.11
-
-```sh
-py -3.11 -m pip install kortex_api-2.2.0.post31-py3-none-any.whl
+Ensure you are on the **calibration branch**:
+```bash
+git checkout calibration
 ```
-
-### Required packages:
-- `opencv-python`
-- `numpy`
-- `pupil-apriltags`
-
-
-## 🎥 4. Test AprilTag Detection (NO ROBOT REQUIRED)
-
-Run the AprilTag webcam viewer:
-
-```sh
-py -3.11 -m local.apriltag_viewer
-```
-
-This will:
-- Open your default webcam
-- Detect AprilTags
-- Display pose (x, y, z, yaw, pitch, roll)
-
-If this works, your AprilTag + OpenCV setup is correct.
 
 ---
 
+## 🧰 3. Install Remaining Dependencies
 
-## 📌 5. Run the Full Calibration Tool (Robot + Camera)
-
-This script:
-- Connects to the robot using Kortex API
-- Streams AprilTag pose
-- Streams robot end-effector pose
-- Saves samples when you press **SPACE**
-- Writes results to `calibration_samples.json`
-
-Run it:
-
-```sh
-py -3.11 -m robot/apriltag_calibration.py --ip <ROBOT_IP> -u <ROBOT_USERNAME> -p <ROBOT_PASSWORD>
+```bash
+py -3.11 -m pip install opencv-python numpy pupil-apriltags
 ```
 
-### Controls
+---
+
+## 🎥 4. Offline AprilTag Viewer (NO ROBOT REQUIRED)
+
+This is a **standalone sanity check** for:
+- AprilTag detection
+- Camera intrinsics
+- Pose stability
+
+### Run (webcam):
+```bash
+py -3.11 -m robot.offline_apriltag_viewer --webcam 0
+```
+
+### Run (video file):
+```bash
+py -3.11 -m robot.offline_apriltag_viewer --video path/to/test.mp4
+```
+
+If this works, your **vision stack is correctly configured**.
+
+---
+
+## 🤖 5. Robot Calibration Capture Tool (LAB USE)
+
+This is the **core purpose of this branch**.
+
+The script:
+- Connects to the Kinova robot using Kortex API
+- Streams live **Base → Tool** pose
+- Detects AprilTags from the **K3 camera**
+- Computes **Base → Tag** pose
+- Saves synchronized samples on command
+
+### Run:
+```bash
+py -3.11 -m robot.apriltag_calibration --ip <ROBOT_IP> -u <USERNAME> -p <PASSWORD>
+```
+
+---
+
+## 🎮 Controls
 
 | Key | Action |
-|-----|--------|
-| **SPACE** | Save a calibration sample |
-| **Q** | Quit program |
+|----|-------|
+| SPACE | Save calibration sample |
+| Q | Quit program |
 
-Calibration samples are saved to:
+---
+
+## 📂 Output
+
+Calibration samples are written to:
+
 ```
 calibration_samples.json
 ```
 
 ---
+
+## 📁 Repository Structure
+
+```
+AprilTagMVP/
+├── robot/
+│   ├── apriltag_calibration.py
+│   ├── apriltag_viewer.py
+│   ├── offline_apriltag_viewer.py
+│   └── device_connection.py
+│
+├── common/
+│   ├── utils.py
+│   ├── webcam_config.py
+│   └── tool_cam_config.py
+│
+├── calibration_samples.json
+└── README.md
+```
+
+---
+
+## 🚧 Scope Disclaimer
+
+This branch is intentionally **narrow in scope**.
+
+Its sole purpose is:
+> **Reliable geometric calibration between the Kinova robot base and the camera-mounted AprilTag frame.**
