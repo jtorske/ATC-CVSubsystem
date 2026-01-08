@@ -15,7 +15,7 @@ from collections import deque
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
 from robot.device_connection import DeviceConnection, parse_connection_arguments
 
-from common.apriltag_utils import create_detector, rotation_to_euler_xyz
+from common.utils import create_detector, rotation_to_euler_xyz, euler_xyz_to_R, compose_base_tag, rotation_error_deg
 from common.webcam_config import (
     rtsp_url,
     tag_size,
@@ -51,27 +51,6 @@ print("R_tool_cam =\n", R_tool_cam)
 print("t_tool_cam =", t_tool_cam)
 
 
-# ================================================================
-# EULER → ROTATION MATRIX (same as apriltag_calibration.py)
-# ================================================================
-def euler_xyz_to_R(rx, ry, rz):
-    cx, cy, cz = np.cos([rx, ry, rz])
-    sx, sy, sz = np.sin([rx, ry, rz])
-
-    Rx = np.array([[1, 0, 0],
-                   [0, cx, -sx],
-                   [0, sx,  cx]])
-
-    Ry = np.array([[ cy, 0, sy],
-                   [  0, 1, 0],
-                   [-sy, 0, cy]])
-
-    Rz = np.array([[cz, -sz, 0],
-                   [sz,  cz, 0],
-                   [ 0,  0, 1]])
-
-    return Rz @ Ry @ Rx
-
 
 # ================================================================
 # GET CURRENT BASE→TOOL POSE
@@ -94,35 +73,6 @@ def get_robot_pose(base_client: BaseClient):
     t = np.array([x, y, z], dtype=float)
 
     return R, t
-
-
-# ================================================================
-# COMPOSE BASE→TAG FROM BASE→TOOL, TOOL→CAM, CAM→TAG
-# ================================================================
-def compose_base_tag(R_base_tool, t_base_tool, R_cam_tag, t_cam_tag):
-    """
-    T_base_cam = T_base_tool · T_tool_cam
-    T_base_tag = T_base_cam · T_cam_tag
-    """
-    # Base→Cam from Base→Tool and Tool→Cam
-    R_base_cam = R_base_tool @ R_tool_cam
-    t_base_cam = R_base_tool @ t_tool_cam + t_base_tool
-
-    # Base→Tag
-    R_base_tag = R_base_cam @ R_cam_tag
-    t_base_tag = R_base_cam @ t_cam_tag + t_base_cam
-
-    return R_base_tag, t_base_tag
-
-
-# ================================================================
-# ROTATION ERROR (OPTIONAL)
-# ================================================================
-def rotation_error_deg(R_ref, R_live):
-    R_err = R_ref.T @ R_live
-    tr = np.trace(R_err)
-    cos_theta = max(min((tr - 1.0) / 2.0, 1.0), -1.0)
-    return float(np.degrees(np.arccos(cos_theta)))
 
 
 # ================================================================
