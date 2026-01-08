@@ -29,6 +29,8 @@ Desktop.ini
 
 # --------- Samples --------
 calibration_samples.json
+session.csv
+*.csv
 
 # -------- Python build/dist --------
 build/
