@@ -1,153 +1,165 @@
-# tools/solve_tool_cam.py
-#
-# Solve the Tool→Cam hand–eye transform using AprilTag-based samples.
-# Uses calibration_samples.json produced by robot/apriltag_calibration.py
+"""
+Hand-Eye Calibration: Find the Tool→Camera transform.
 
-import json
-import numpy as np
+Procedure:
+1. Place an AprilTag in a FIXED location (don't move it!)
+2. Move the robot arm to multiple poses while keeping the tag visible
+3. Record (Base→Tool, Cam→Tag) pairs at each pose
+4. Solve AX=XB problem
+"""
 import cv2
-import os
+import numpy as np
+import json
 
-CALIB_SAMPLES = "calibration_samples.json"
-OUT_PY = os.path.join("common", "tool_cam_config.py")
+def collect_calibration_samples(ip, username, password, num_samples=10):
+    """Collect pose pairs for hand-eye calibration."""
+    from robot.device_connection import DeviceConnection
+    from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
+    from common.utils import create_detector, euler_xyz_to_R
+    from common.webcam_config import rtsp_url, tag_size, camera_params
+    
+    samples = []
+    
+    class ConnArgs:
+        def __init__(self, ip, u, p):
+            self.ip = ip
+            self.username = u
+            self.password = p
+    
+    conn_args = ConnArgs(ip, username, password)
+    
+    with DeviceConnection.create_tcp_connection(conn_args) as router:
+        base_client = BaseClient(router)
+        cap = cv2.VideoCapture(rtsp_url(ip))
+        detector = create_detector()
+        
+        print(f"Collect {num_samples} samples.")
+        print("Move arm to different poses, press 'c' to capture, 'q' to finish.\n")
+        
+        while len(samples) < num_samples:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            results = detector.detect(gray, estimate_tag_pose=True,
+                                      camera_params=camera_params, tag_size=tag_size)
+            
+            display = frame.copy()
+            tag_found = len(results) > 0
+            
+            if tag_found:
+                r = results[0]
+                pts = np.array([r.corners], dtype=np.int32)
+                cv2.polylines(display, pts, True, (0, 255, 0), 3)
+                cv2.putText(display, "Tag found - 'c' to capture", (20, 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            else:
+                cv2.putText(display, "No tag visible", (20, 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            cv2.putText(display, f"Samples: {len(samples)}/{num_samples}", (20, 80),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            cv2.imshow("Hand-Eye Calibration", display)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c') and tag_found:
+                # Get robot pose
+                pose = base_client.GetMeasuredCartesianPose()
+                t_base_tool = np.array([pose.x, pose.y, pose.z])
+                R_base_tool = euler_xyz_to_R(
+                    np.deg2rad(pose.theta_x),
+                    np.deg2rad(pose.theta_y),
+                    np.deg2rad(pose.theta_z)
+                )
+                
+                # Get tag pose
+                r = results[0]
+                t_cam_tag = r.pose_t[:, 0]
+                R_cam_tag = r.pose_R
+                
+                samples.append({
+                    "R_base_tool": R_base_tool.tolist(),
+                    "t_base_tool": t_base_tool.tolist(),
+                    "R_cam_tag": R_cam_tag.tolist(),
+                    "t_cam_tag": t_cam_tag.tolist(),
+                })
+                print(f"Captured sample {len(samples)}")
+                
+            elif key == ord('q'):
+                break
+        
+        cap.release()
+        cv2.destroyAllWindows()
+    
+    # Save samples
+    with open("calibration_samples.json", "w") as f:
+        json.dump(samples, f, indent=2)
+    print(f"\nSaved {len(samples)} samples to calibration_samples.json")
+    return samples
 
 
-def load_samples(path=CALIB_SAMPLES):
-    """
-    Load hand–eye calibration samples and convert them into the format
-    expected by cv2.calibrateHandEye.
-
-    calibration_samples.json entries look like:
-
-      {
-        "R_base_tool": [[...],[...],[...]],  # 3x3
-        "t_base_tool": [...],               # 3
-        "R_cam_tag":   [[...],[...],[...]],  # 3x3
-        "t_cam_tag":   [...]                 # 3
-      }
-
-    We have:
-      - R_base_tool, t_base_tool : Base → Tool
-      - R_cam_tag,   t_cam_tag   : Cam → Tag
-
-    OpenCV wants:
-      - R_gripper2base, t_gripper2base : Gripper/Tool → Base
-      - R_target2cam,  t_target2cam    : Target/Tag → Cam
-
-    So we invert both transforms before passing them in.
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"'{path}' not found. Run robot.apriltag_calibration first "
-            "to collect calibration samples."
-        )
-
-    with open(path, "r") as f:
-        samples = json.load(f)
-
-    if not isinstance(samples, list) or len(samples) < 3:
-        raise RuntimeError(
-            f"Need at least 3 samples for hand–eye calibration, got {len(samples)}."
-        )
-
-    R_gripper2base = []  # Tool → Base
-    t_gripper2base = []  # Tool → Base
-    R_target2cam = []    # Tag → Cam
-    t_target2cam = []    # Tag → Cam
-
-    for i, s in enumerate(samples):
-        try:
-            R_b_t = np.array(s["R_base_tool"], dtype=float)  # Base → Tool
-            t_b_t = np.array(s["t_base_tool"], dtype=float)  # Base → Tool
-            R_c_tag = np.array(s["R_cam_tag"], dtype=float)  # Cam → Tag
-            t_c_tag = np.array(s["t_cam_tag"], dtype=float)  # Cam → Tag
-
-            assert R_b_t.shape == (3, 3)
-            assert R_c_tag.shape == (3, 3)
-            assert t_b_t.shape == (3,)
-            assert t_c_tag.shape == (3,)
-        except Exception as e:
-            raise RuntimeError(f"Bad sample format at index {i}: {e}")
-
-        # ---- Invert Base→Tool to get Tool→Base (OpenCV wants this) ----
-        # Tool→Base:  T_tb = T_bt^{-1}
-        # R_tb = R_bt^T
-        # t_tb = -R_tb * t_bt
-        R_t_b = R_b_t.T
-        t_t_b = -R_t_b @ t_b_t
-
-        # ---- Invert Cam→Tag to get Tag→Cam (OpenCV wants this) ----
-        # Tag→Cam:  T_tc = T_ct^{-1}
-        R_tag_c = R_c_tag.T
-        t_tag_c = -R_tag_c @ t_c_tag
-
-        R_gripper2base.append(R_t_b)
-        t_gripper2base.append(t_t_b)
-        R_target2cam.append(R_tag_c)
-        t_target2cam.append(t_tag_c)
-
-    return (
-        R_gripper2base,
-        t_gripper2base,
-        R_target2cam,
-        t_target2cam,
+def solve_hand_eye(samples):
+    """Solve for Tool→Camera transform using OpenCV."""
+    R_gripper2base = []  # R_base_tool.T (inverted)
+    t_gripper2base = []
+    R_target2cam = []    # R_cam_tag
+    t_target2cam = []
+    
+    for s in samples:
+        R_bt = np.array(s["R_base_tool"])
+        t_bt = np.array(s["t_base_tool"])
+        R_ct = np.array(s["R_cam_tag"])
+        t_ct = np.array(s["t_cam_tag"])
+        
+        # OpenCV wants gripper2base (inverse of base2tool)
+        R_gripper2base.append(R_bt.T)
+        t_gripper2base.append(-R_bt.T @ t_bt)
+        R_target2cam.append(R_ct)
+        t_target2cam.append(t_ct)
+    
+    R_cam2tool, t_cam2tool = cv2.calibrateHandEye(
+        R_gripper2base, t_gripper2base,
+        R_target2cam, t_target2cam,
+        method=cv2.CALIB_HAND_EYE_TSAI
     )
-
-
-def solve_tool_cam():
-    (
-        R_gripper2base,
-        t_gripper2base,
-        R_target2cam,
-        t_target2cam,
-    ) = load_samples()
-
-    # OpenCV calibrateHandEye expects:
-    #   R_gripper2base, t_gripper2base : list of 3x3, 3x1
-    #   R_target2cam,  t_target2cam    : list of 3x3, 3x1
-    R_cam2gripper, t_cam2gripper = cv2.calibrateHandEye(
-        R_gripper2base,
-        t_gripper2base,
-        R_target2cam,
-        t_target2cam,
-        method=cv2.CALIB_HAND_EYE_TSAI,
-    )
-
-    # Ensure shapes
-    R_cam2gripper = np.asarray(R_cam2gripper, dtype=float).reshape(3, 3)
-    t_cam2gripper = np.asarray(t_cam2gripper, dtype=float).reshape(3)
-
-    # We want Tool→Cam (gripper→cam):
-    #   T_cam_gripper = [R_cg, t_cg]
-    #   T_gripper_cam = T_cam_gripper^{-1}
-    #                 = [R_cg^T, -R_cg^T * t_cg]
-    R_tool_cam = R_cam2gripper.T
-    t_tool_cam = -R_tool_cam @ t_cam2gripper
-
-    print("====== Hand-Eye Result (Tool→Cam) ======")
+    
+    # We want Tool→Cam, so invert
+    R_tool_cam = R_cam2tool.T
+    t_tool_cam = -R_cam2tool.T @ t_cam2tool.flatten()
+    
+    print("\n=== HAND-EYE CALIBRATION RESULTS ===")
     print("R_tool_cam =")
-    print(R_tool_cam)
-    print("\nt_tool_cam =")
-    print(t_tool_cam)
-
-    os.makedirs(os.path.dirname(OUT_PY), exist_ok=True)
-
-    with open(OUT_PY, "w") as f:
-        f.write("# common/tool_cam_config.py\n")
-        f.write("# Auto-generated by tools/solve_tool_cam.py\n")
-        f.write("import numpy as np\n\n")
-        f.write("R_tool_cam = np.array([\n")
-        for row in R_tool_cam:
-            f.write(f"    [{row[0]:.16f}, {row[1]:.16f}, {row[2]:.16f}],\n")
-        f.write("])\n\n")
-        f.write("t_tool_cam = np.array([\n")
-        f.write(f"    {t_tool_cam[0]:.16f},\n")
-        f.write(f"    {t_tool_cam[1]:.16f},\n")
-        f.write(f"    {t_tool_cam[2]:.16f},\n")
-        f.write("])\n")
-
-    print(f"\n[✓] Saved Tool→Cam transform to {OUT_PY}")
+    print(repr(R_tool_cam))
+    print(f"\nt_tool_cam (meters) =")
+    print(repr(t_tool_cam))
+    
+    # Save
+    result = {
+        "R_tool_cam": R_tool_cam.tolist(),
+        "t_tool_cam": t_tool_cam.tolist(),
+    }
+    with open("tool_cam_calibration.json", "w") as f:
+        json.dump(result, f, indent=2)
+    print("\nSaved to tool_cam_calibration.json")
+    
+    return R_tool_cam, t_tool_cam
 
 
 if __name__ == "__main__":
-    solve_tool_cam()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--ip", default="192.168.1.10")
+    p.add_argument("-u", "--username", default="SSE_Student")
+    p.add_argument("-p", "--password", default="Kinova G3")
+    p.add_argument("--solve-only", action="store_true", help="Just solve from existing samples")
+    args = p.parse_args()
+    
+    if args.solve_only:
+        with open("calibration_samples.json") as f:
+            samples = json.load(f)
+    else:
+        samples = collect_calibration_samples(args.ip, args.username, args.password)
+    
+    if len(samples) >= 3:
+        solve_hand_eye(samples)

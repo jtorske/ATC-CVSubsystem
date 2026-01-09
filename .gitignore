@@ -27,9 +27,6 @@ kortex_api-*.whl
 Thumbs.db
 Desktop.ini
 
-# --------- Samples --------
-calibration_samples.json
-
 # -------- Python build/dist --------
 build/
 dist/
