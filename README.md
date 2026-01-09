@@ -71,7 +71,48 @@ py -3.11 -m robot.offline_apriltag_viewer
 py -3.11 -m robot.offline_apriltag_viewer --camera 1 --tag-size 0.10
 ```
 
-### Controls
+---
+
+## 🎥 4. Offline AprilTag Viewer (NO ROBOT REQUIRED)
+
+This is a **standalone sanity check** for:
+- AprilTag detection
+- Camera intrinsics
+- Pose stability
+
+### Run (webcam):
+```bash
+py -3.11 -m robot.offline_apriltag_viewer --webcam 0
+```
+
+### Run (video file):
+```bash
+py -3.11 -m robot.offline_apriltag_viewer --video path/to/test.mp4
+```
+
+If this works, your **vision stack is correctly configured**.
+
+---
+
+## 🤖 5. Robot Calibration Capture Tool (LAB USE)
+
+This is the **core purpose of this branch**.
+
+The script:
+- Connects to the Kinova robot using Kortex API
+- Streams live **Base → Tool** pose
+- Detects AprilTags from the **K3 camera**
+- Computes **Base → Tag** pose
+- Saves synchronized samples on command
+
+### Run:
+```bash
+py -3.11 -m robot.apriltag_calibration --ip <ROBOT_IP> -u <USERNAME> -p <PASSWORD>
+```
+
+---
+
+## 🎮 Controls
 
 | Key | Action |
 | --- | ------ |
