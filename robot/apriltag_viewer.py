@@ -43,20 +43,7 @@ from common.tool_cam_config import R_tool_cam, t_tool_cam
 # Camera intrinsics from calibration
 fx_calib, fy_calib, cx_calib, cy_calib = camera_params
 
-# Depth scale correction factor (empirically determined)
-# This compensates for any systematic depth estimation bias
-DEPTH_SCALE = 0.30 / 0.225  # ~1.333
-
-# Apply depth scale to focal lengths for AprilTag pose estimation
-fx_tag = fx_calib * DEPTH_SCALE
-fy_tag = fy_calib * DEPTH_SCALE
-camera_params_tag = (fx_tag, fy_tag, cx_calib, cy_calib)
-
-# Convert Tool→Cam translation to meters (if stored in mm or other units)
-# Check your tool_cam_config.py units - adjust if needed
-T_TOOL_CAM_SCALE = 0.01  # Set to 1.0 if already in meters, 0.001 if in mm, 0.01 if in cm
-t_tool_cam_m = t_tool_cam * T_TOOL_CAM_SCALE
-
+camera_params_tag = (fx_calib, fy_calib, cx_calib, cy_calib)
 
 def print_config():
     """Print configuration for debugging."""
@@ -65,11 +52,10 @@ def print_config():
     print("=" * 60)
     print(f"[Camera Intrinsics (calibrated)]")
     print(f"  fx={fx_calib:.2f}, fy={fy_calib:.2f}, cx={cx_calib:.2f}, cy={cy_calib:.2f}")
-    print(f"[Depth Scale Factor]: {DEPTH_SCALE:.4f}")
     print(f"[Camera Intrinsics (for AprilTag)]")
-    print(f"  fx={fx_tag:.2f}, fy={fy_tag:.2f}, cx={cx_calib:.2f}, cy={cy_calib:.2f}")
+    print(f"  fx={fx_calib:.2f}, fy={fy_calib:.2f}, cx={cx_calib:.2f}, cy={cy_calib:.2f}")
     print(f"[Tag Size]: {tag_size:.4f} m ({tag_size*100:.1f} cm)")
-    print(f"[Tool→Cam Translation (m)]: {t_tool_cam_m}")
+    print(f"[Tool→Cam Translation (m)]: {t_tool_cam}")
     print(f"[Tool→Cam Rotation]:\n{R_tool_cam}")
     print("=" * 60)
 
@@ -205,7 +191,7 @@ def compute_tag_coordinates(
     # Chain: Base→Tool→Cam→Tag
     R_base_tag, t_base_tag = compose_base_tag(
         R_base_tool, t_base_tool,
-        R_tool_cam, t_tool_cam_m,
+        R_tool_cam, t_tool_cam,
         R_cam_tag, t_cam_tag
     )
     
